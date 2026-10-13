@@ -4,17 +4,21 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "build": "next build",
+    "build": "next build --webpack",
     "start": "next start",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "d3-delaunay": "^6.0.4",
+    "gifenc": "^1.0.3",
     "idb": "8.0.4",
+    "mp4-muxer": "^5.2.2",
     "next": "16.4.0",
     "react": "19.3.0",
     "react-dom": "19.3.0"
   },
   "devDependencies": {
+    "@types/d3-delaunay": "^6.0.4",
     "@types/node": "^22",
     "@types/react": "^19",
     "@types/react-dom": "^19",
