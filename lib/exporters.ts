@@ -217,17 +217,22 @@ export async function exportVideo(plan: Plan, sources: ImageBitmap[], stamp: boo
         error: (e) => (failure = e as Error),
       });
       encoder.configure(config);
-      for (let i = 0; i < frames; i++) {
+      try {
+        for (let i = 0; i < frames; i++) {
+          if (failure) throw failure;
+          renderPiece(ctx, plan, sources, w, h, { t: Math.min(1, i / fps / ASSEMBLE), stamp });
+          const frame = new VideoFrame(c, { timestamp: Math.round((i * 1e6) / fps), duration: Math.round(1e6 / fps) });
+          encoder.encode(frame, { keyFrame: i % 60 === 0 });
+          frame.close();
+          onProgress((i + 1) / frames);
+          if (encoder.encodeQueueSize > 4 || i % 4 === 0) await tick();
+        }
+        await encoder.flush();
         if (failure) throw failure;
-        renderPiece(ctx, plan, sources, w, h, { t: Math.min(1, i / fps / ASSEMBLE), stamp });
-        const frame = new VideoFrame(c, { timestamp: Math.round((i * 1e6) / fps), duration: Math.round(1e6 / fps) });
-        encoder.encode(frame, { keyFrame: i % 60 === 0 });
-        frame.close();
-        onProgress((i + 1) / frames);
-        if (encoder.encodeQueueSize > 4 || i % 4 === 0) await tick();
+      } finally {
+        // Release the hardware encoder even when encoding fails part-way.
+        if (encoder.state !== "closed") encoder.close();
       }
-      await encoder.flush();
-      if (failure) throw failure;
       muxer.finalize();
       return { blob: new Blob([target.buffer], { type: "video/mp4" }), ext: "mp4" };
     }
@@ -255,6 +260,7 @@ export async function exportVideo(plan: Plan, sources: ImageBitmap[], stamp: boo
   });
   rec.stop();
   await done;
+  stream.getTracks().forEach((track) => track.stop());
   const type = mime.split(";")[0];
   return { blob: new Blob(chunks, { type }), ext: type === "video/mp4" ? "mp4" : "webm" };
 }

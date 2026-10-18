@@ -6,7 +6,10 @@ import { useEffect, useState } from "react";
 export default function Thumb({ blob, alt, className }: { blob?: Blob; alt: string; className?: string }) {
   const [url, setUrl] = useState<string | null>(null);
   useEffect(() => {
-    if (!blob) return;
+    if (!blob) {
+      setUrl(null);
+      return;
+    }
     const u = URL.createObjectURL(blob);
     setUrl(u);
     return () => URL.revokeObjectURL(u);

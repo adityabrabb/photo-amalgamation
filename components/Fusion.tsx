@@ -65,6 +65,7 @@ const MAX_ATTEMPTS = 12;
 const NUDGE_AFTER = 5;
 const ANIM_MS = 1900;
 const EXPORT_SCALES = [1, 2, 4] as const;
+const FUSING = "Fusing…";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -179,6 +180,9 @@ export default function Fusion() {
 
   const planFor = (spec: PieceSpec, imgs: SourceImage[]) => engine.plan(spec, planImages(imgs));
 
+  /** A superseded fuse returns early without clearing its busy label; whoever supersedes it clears it here. */
+  const clearFusing = () => setBusy((b) => (b === FUSING ? null : b));
+
   const fail = (e: unknown) => {
     setBusy(null);
     setStatus(`Something went wrong: ${e instanceof Error ? e.message : e}`);
@@ -190,7 +194,7 @@ export default function Fusion() {
       const imgs = imagesRef.current;
       if (imgs.length < MIN_IMAGES) return;
       const token = ++genRef.current;
-      setBusy("Fusing…");
+      setBusy(FUSING);
       try {
         let settings = settingsRef.current;
         let chosen: { spec: PieceSpec; plan: Plan; ph: string } | null = null;
@@ -234,6 +238,7 @@ export default function Fusion() {
     const imgs = imagesRef.current;
     if (!cur || imgs.length < MIN_IMAGES) return;
     const token = ++genRef.current;
+    clearFusing();
     try {
       const settings = settingsRef.current;
       const recipe = resolveRecipe(settings, forkRng(cur.spec.seed, "recipe"), null, cur.spec.recipe);
@@ -259,7 +264,7 @@ export default function Fusion() {
   const renderExplicit = useCallback(
     async (spec: PieceSpec, imgs: SourceImage[], doRecord: boolean) => {
       const token = ++genRef.current;
-      setBusy("Fusing…");
+      setBusy(FUSING);
       try {
         const plan = await planFor(spec, imgs);
         if (token !== genRef.current) return;
@@ -290,8 +295,13 @@ export default function Fusion() {
 
   // Recipe link in the URL hash (recipe only — photos never travel).
   useEffect(() => {
-    const part = recipeFromHash(location.hash);
-    if (part) applyRecipe(part, "Recipe from link");
+    const load = () => {
+      const part = recipeFromHash(location.hash);
+      if (part) applyRecipe(part, "Recipe from link");
+    };
+    load();
+    window.addEventListener("hashchange", load);
+    return () => window.removeEventListener("hashchange", load);
   }, [applyRecipe]);
 
   // ---- Images ----
@@ -333,11 +343,16 @@ export default function Fusion() {
         writes.push(putImage(img.hash, file, img.name).catch(() => {}));
       }
       await Promise.all(writes);
-      commitImages([...imagesRef.current, ...fresh]);
+      // Another add may have finished while these were decoding; re-check for duplicates and the cap.
+      const have = new Set(imagesRef.current.map((i) => i.hash));
+      const unique = fresh.filter((img) => !have.has(img.hash));
+      const kept = unique.slice(0, Math.max(0, MAX_IMAGES - imagesRef.current.length));
+      for (const img of fresh) if (!kept.includes(img)) releaseImage(img);
+      commitImages([...imagesRef.current, ...kept]);
       setBusy(null);
-      const skipped = files.length - fresh.length;
-      setStatus(skipped > 0 ? `Added ${fresh.length}; skipped ${skipped} (duplicate, unreadable, or over limit).` : "");
-      if (fresh.length) onImagesChanged();
+      const skipped = files.length - kept.length;
+      setStatus(skipped > 0 ? `Added ${kept.length}; skipped ${skipped} (duplicate, unreadable, or over limit).` : "");
+      if (kept.length) onImagesChanged();
     },
     [onImagesChanged],
   );
@@ -349,6 +364,7 @@ export default function Fusion() {
     commitImages(next);
     if (next.length < MIN_IMAGES) {
       genRef.current++;
+      clearFusing();
       setCurrent(null);
       return;
     }
@@ -374,10 +390,18 @@ export default function Fusion() {
         continue;
       }
       const stored = await getImage(h);
-      if (!stored) return null;
+      if (!stored) {
+        releaseUnused(out);
+        return null;
+      }
       out.push(await loadImage(stored.blob, stored.name, h));
     }
     return out;
+  };
+
+  /** Release images loaded for a recall/duel that end up not being used. */
+  const releaseUnused = (imgs: SourceImage[]) => {
+    for (const img of imgs) if (!imagesRef.current.includes(img)) releaseImage(img);
   };
 
   const swapImages = (next: SourceImage[]) => {
@@ -395,7 +419,7 @@ export default function Fusion() {
 
   // ---- Actions ----
   const fuse = () => {
-    if (!canFuse) return;
+    if (!canFuse || busy) return;
     if (lockedRef.current && currentRef.current) rerenderLocked();
     else fuseFresh();
   };
@@ -460,7 +484,10 @@ export default function Fusion() {
         const one = await imagesByHash([h]);
         if (one) imgs.push(...one);
       }
-      if (imgs.length < MIN_IMAGES) imgs = imagesRef.current;
+      if (imgs.length < MIN_IMAGES) {
+        releaseUnused(imgs);
+        imgs = imagesRef.current;
+      }
       if (imgs.length < MIN_IMAGES) {
         setBusy(null);
         setStatus("Duel needs at least two photos available.");
@@ -491,6 +518,7 @@ export default function Fusion() {
       s.last = null;
       setScrambling(true);
       const token = ++genRef.current;
+      clearFusing();
       s.loop = (async () => {
         while (s.active) {
           const seed = newSeed();
@@ -514,6 +542,7 @@ export default function Fusion() {
     };
     const down = (e: KeyboardEvent) => {
       if (e.code !== "Space" || e.repeat || isTyping(e.target) || e.target instanceof HTMLButtonElement) return;
+      if (e.target instanceof HTMLElement && e.target.getAttribute("role") === "button") return;
       e.preventDefault();
       start();
     };
@@ -763,7 +792,11 @@ export default function Fusion() {
             onClick={() => fileInputRef.current?.click()}
             role="button"
             tabIndex={0}
-            onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && fileInputRef.current?.click()}
+            onKeyDown={(e) => {
+              if (e.key !== "Enter" && e.key !== " ") return;
+              e.preventDefault();
+              fileInputRef.current?.click();
+            }}
           >
             <strong>Drop images here</strong>
             <span className="muted">or click · or paste · {MIN_IMAGES}–{MAX_IMAGES} images</span>

@@ -139,7 +139,8 @@ export function isSettings(v: unknown): v is Settings {
   const s = v as Settings;
   return (
     !!s &&
-    s.ratio in RATIOS &&
+    typeof s.ratio === "string" &&
+    Object.hasOwn(RATIOS, s.ratio) &&
     (s.mood === "auto" || MOODS.includes(s.mood)) &&
     (s.cut === "auto" || CUTS.includes(s.cut)) &&
     [s.density, s.chaos, s.blend, s.warp].every((n) => typeof n === "number" && n >= 0 && n <= 1) &&
@@ -155,8 +156,10 @@ export function isRecipe(v: unknown): v is Recipe {
     (r.mood2 === null || MOODS.includes(r.mood2)) &&
     CUTS.includes(r.cut) &&
     LAYOUTS.includes(r.layout) &&
-    r.blendSet in BLEND_SETS &&
+    typeof r.blendSet === "string" &&
+    Object.hasOwn(BLEND_SETS, r.blendSet) &&
     Number.isInteger(r.remix) &&
+    r.remix >= 0 &&
     typeof r.hybrid === "boolean"
   );
 }
