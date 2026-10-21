@@ -1,6 +1,6 @@
-// Color utilities, k-means palette extraction, preset palettes, gradient-map LUTs and color naming.
-import { createRng, deriveSeed, type Rng } from "./prng";
-import type { Mood, PaletteMode } from "./settings";
+// Color utilities, k-means palette extraction, the ink sets, gradient-map LUTs and color naming.
+import { createRng, deriveSeed } from "./prng";
+import type { PaletteMode } from "./settings";
 
 export type RGB = [number, number, number];
 export type Swatch = { rgb: RGB; weight: number };
@@ -24,16 +24,6 @@ export function rgbToHsl([r, g, b]: RGB): [number, number, number] {
   const s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
   const h = max === r ? (g - b) / d + (g < b ? 6 : 0) : max === g ? (b - r) / d + 2 : (r - g) / d + 4;
   return [h * 60, s, l];
-}
-
-export function hslToRgb(h: number, s: number, l: number): RGB {
-  h = ((h % 360) + 360) % 360 / 360;
-  const f = (n: number) => {
-    const k = (n + h * 12) % 12;
-    const a = s * Math.min(l, 1 - l);
-    return 255 * (l - a * Math.max(-1, Math.min(k - 3, 9 - k, 1)));
-  };
-  return [f(0), f(8), f(4)];
 }
 
 export const mixRgb = (a: RGB, b: RGB, t: number): RGB => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
@@ -84,59 +74,94 @@ export function mergePalettes(palettes: Swatch[][], k = 6): Swatch[] {
   return kmeans(pts, ws, k, "merge:" + pts.map((p) => p.map(Math.round).join(",")).join(";"));
 }
 
-const PRESETS: Record<Exclude<PaletteMode, "source">, string[]> = {
-  warm: ["#2a1410", "#7a2e1f", "#c8553d", "#f28f3b", "#ffd5a5", "#fff3e2"],
-  cold: ["#0b1626", "#1d3557", "#457b9d", "#7fb7d8", "#c9e4f2", "#f1faff"],
-  mono: ["#0e0e0e", "#3a3a3a", "#777777", "#b5b5b5", "#e6e6e6", "#fafafa"],
-  neon: ["#0a0014", "#3a0ca3", "#f72585", "#4cc9f0", "#b8ff3c", "#ffffff"],
+const saturation = (c: RGB) => rgbToHsl(c)[1] * (1 - Math.abs(luma(c) / 255 - 0.5));
+
+/**
+ * Ink sets: paper (the ground), ink (darkest, carries small type), pop (the loud one), alt (a second loud
+ * or light ink). Every set is built so ink-on-paper and pop-on-ink read from across a room.
+ */
+export type InkSet = {
+  id: string;
+  /** Printed on the piece, in order: paper, ink, pop, alt. */
+  names: [string, string, string, string];
+  paper: string;
+  ink: string;
+  pop: string;
+  alt: string;
+  families: readonly Exclude<PaletteMode, "source" | "loud">[];
 };
-export const BAUHAUS = ["#111111", "#1d4fa0", "#e63022", "#f5c518", "#f2efe6"];
-const EARTHY = ["#1f2416", "#4a5a2f", "#7d8b4e", "#b5a26a", "#c97b4a", "#efe6d2"];
 
-export const RISO_INKS: { name: string; hex: string }[] = [
-  { name: "Fluorescent Pink", hex: "#ff48b0" },
-  { name: "Blue", hex: "#0078bf" },
-  { name: "Yellow", hex: "#ffe800" },
-  { name: "Teal", hex: "#00838a" },
-  { name: "Orange", hex: "#ff6c2f" },
-  { name: "Purple", hex: "#765ba7" },
-  { name: "Bright Red", hex: "#f15060" },
-  { name: "Green", hex: "#00a95c" },
-  { name: "Federal Blue", hex: "#3d5588" },
+export const INK_SETS: readonly InkSet[] = [
+  { id: "pink-ultra", names: ["Cream", "Ultramarine", "Fluo Pink", "Yellow"], paper: "#f4efe4", ink: "#1b2a9e", pop: "#ff48b0", alt: "#ffe800", families: ["neon", "cold"] },
+  { id: "acid-red", names: ["Acid", "Jet", "Signal Red", "Hot Pink"], paper: "#e4ff1a", ink: "#0d0c0b", pop: "#ff2e1f", alt: "#ff2d95", families: ["neon", "warm"] },
+  { id: "tomato-teal", names: ["Bone", "Deep Teal", "Tomato", "Seafoam"], paper: "#f2e9dc", ink: "#0f3b3d", pop: "#ff5a36", alt: "#19b3a6", families: ["warm"] },
+  { id: "night-fluo", names: ["Jet", "Bone", "Hot Pink", "Lime"], paper: "#0d0c0b", ink: "#f1ead8", pop: "#ff2d95", alt: "#d7ff1f", families: ["neon"] },
+  { id: "klein-orange", names: ["Chalk", "Klein Blue", "Orange", "Sunflower"], paper: "#f1ede4", ink: "#002fa7", pop: "#ff6c2f", alt: "#ffd23f", families: ["cold", "warm"] },
+  { id: "mint-burgundy", names: ["Mint", "Burgundy", "Coral Red", "Milk"], paper: "#c8eee4", ink: "#4a0f2e", pop: "#ff4f5e", alt: "#fff7e8", families: ["cold"] },
+  { id: "sun-violet", names: ["Sunflower", "Deep Violet", "Rose", "Cream"], paper: "#ffb511", ink: "#2a0f57", pop: "#ff3d8b", alt: "#fff3d6", families: ["warm"] },
+  { id: "kraft", names: ["Kraft", "Jet", "Poster Red", "Bone"], paper: "#c9a676", ink: "#141210", pop: "#e8202a", alt: "#f3ecdc", families: ["warm", "mono"] },
+  { id: "ice-red", names: ["Ice", "Navy", "Signal Red", "Sky"], paper: "#e6f0f4", ink: "#0b1f3a", pop: "#ff3b30", alt: "#59c3e8", families: ["cold"] },
+  { id: "forest-orange", names: ["Oat", "Forest", "Blaze Orange", "Lime"], paper: "#efe8d6", ink: "#11382a", pop: "#ff6a1f", alt: "#b5e03c", families: ["warm"] },
+  { id: "xerox-red", names: ["Xerox White", "Toner Black", "Red", "Grey"], paper: "#ebe9e4", ink: "#111111", pop: "#e3261c", alt: "#9a9a9a", families: ["mono"] },
+  { id: "lilac-lime", names: ["Lilac", "Ink Navy", "Lime", "Bubblegum"], paper: "#cbbcff", ink: "#17123d", pop: "#c8ff00", alt: "#ff4fa3", families: ["neon", "cold"] },
+  { id: "gold-black", names: ["Jet", "Bone", "Gold", "Oxblood"], paper: "#0f0e0d", ink: "#f0e8d4", pop: "#d6a740", alt: "#8c2b1f", families: ["mono", "warm"] },
+  { id: "cobalt-yellow", names: ["Paper", "Cobalt", "Chrome Yellow", "Pink"], paper: "#f6f1e6", ink: "#1238d6", pop: "#ffd400", alt: "#ff5c8a", families: ["cold"] },
+  { id: "blood-cream", names: ["Poster Red", "Jet", "Cream", "Yellow"], paper: "#e8261c", ink: "#120c0b", pop: "#f4ecd8", alt: "#ffd400", families: ["warm"] },
+  { id: "bubblegum", names: ["Bubblegum", "Aubergine", "Vermilion", "Lemon"], paper: "#ff8fc6", ink: "#1a1033", pop: "#ff4a1c", alt: "#fff36b", families: ["neon", "warm"] },
 ];
-export const RISO_PAPER = "#f3ede2";
 
-function saturation(c: RGB) {
-  return rgbToHsl(c)[1] * (1 - Math.abs(luma(c) / 255 - 0.5));
+export function inkSet(id: string): InkSet {
+  return INK_SETS.find((s) => s.id === id) ?? INK_SETS[0];
 }
 
-export function mostSaturated(source: Swatch[]): RGB | null {
-  const best = [...source].sort((a, b) => saturation(b.rgb) - saturation(a.rgb))[0];
-  return best && saturation(best.rgb) > 0.18 ? best.rgb : null;
-}
+export const isDarkPaper = (s: InkSet) => luma(parseHex(s.paper)) < 90;
 
-function rotateHue(c: RGB, deg: number): RGB {
-  const [h, s, l] = rgbToHsl(c);
-  return hslToRgb(h + deg, s, l);
-}
+const hueDist = (a: number, b: number) => Math.min(Math.abs(a - b), 360 - Math.abs(a - b)) / 180;
 
-/** Palette (dark → light) for a piece, from palette mode + mood, biased toward source colors. */
-export function resolvePalette(mode: PaletteMode, mood: Mood, mood2: Mood | null, source: Swatch[], rng: Rng, remix: number): RGB[] {
-  const src = source.length ? source.map((s) => s.rgb) : PRESETS.mono.map(parseHex);
-  let colors: RGB[];
-  if (mood === "bauhaus") colors = BAUHAUS.map(parseHex);
-  else if (mood === "brutal") colors = [[0, 0, 0], [255, 255, 255], mostSaturated(source) ?? parseHex("#ff3b1f")];
-  else if (mood === "botanical") colors = [...EARTHY.map(parseHex), ...(mode === "source" ? src.slice(0, 3) : PRESETS[mode].map(parseHex).slice(1, 4))];
-  else colors = mode === "source" ? src : PRESETS[mode].map(parseHex).map((c, i) => mixRgb(c, src[i % src.length], 0.18));
-
-  if (mood2 === "bauhaus") colors = [...colors, ...BAUHAUS.slice(1, 4).map(parseHex)];
-  if (mood2 === "botanical") colors = [...colors, ...EARTHY.slice(1, 4).map(parseHex)];
-
-  if (remix > 0 && mood !== "brutal") {
-    const shift = rng.range(35, 160) * rng.sign();
-    colors = colors.map((c) => rotateHue(c, shift));
+/**
+ * How well an ink set suits the photos: its loud inks should echo (or squarely oppose) the photos' most
+ * saturated hues, so the print looks born from them rather than pasted over them.
+ */
+export function inkAffinity(set: InkSet, source: Swatch[]): number {
+  const loud = source.filter((s) => saturation(s.rgb) > 0.12);
+  if (!loud.length) return set.families.includes("mono") ? 1 : 0.5;
+  let score = 0, wsum = 0;
+  for (const s of loud) {
+    const h = rgbToHsl(s.rgb)[0];
+    const w = s.weight * saturation(s.rgb);
+    const near = Math.max(...[set.pop, set.alt, set.ink, set.paper].map((c) => {
+      const [ch, cs] = rgbToHsl(parseHex(c));
+      return cs < 0.2 ? 0 : 1 - hueDist(h, ch);
+    }));
+    const opposite = Math.max(...[set.pop, set.alt].map((c) => 1 - Math.abs(hueDist(h, rgbToHsl(parseHex(c))[0]) - 1)));
+    score += w * Math.max(near, opposite * 0.8);
+    wsum += w;
   }
-  return colors.sort((a, b) => luma(a) - luma(b));
+  return score / wsum;
+}
+
+export function inkCandidates(mode: PaletteMode): readonly InkSet[] {
+  if (mode === "source" || mode === "loud") return INK_SETS;
+  const pool = INK_SETS.filter((s) => s.families.includes(mode));
+  return pool.length ? pool : INK_SETS;
+}
+
+/** Index of the most saturated swatch's hue, as a coarse family for picking words. */
+export function hueFamily(source: Swatch[]): string {
+  const best = [...source].sort((a, b) => saturation(b.rgb) * Math.sqrt(b.weight) - saturation(a.rgb) * Math.sqrt(a.weight))[0];
+  if (!best || saturation(best.rgb) < 0.1) {
+    const l = source.reduce((s, c) => s + luma(c.rgb) * c.weight, 0);
+    return l < 110 ? "dark" : "light";
+  }
+  const h = rgbToHsl(best.rgb)[0];
+  if (h < 15 || h >= 340) return "red";
+  if (h < 42) return "orange";
+  if (h < 68) return "yellow";
+  if (h < 160) return "green";
+  if (h < 200) return "teal";
+  if (h < 255) return "blue";
+  if (h < 300) return "purple";
+  return "pink";
 }
 
 /** 256-entry RGB LUT mapping luminance → color along the given stops. */
@@ -155,33 +180,6 @@ export function gradientLut(stops: RGB[], contrast = 1): Uint8ClampedArray {
     lut[i * 3] = c[0]; lut[i * 3 + 1] = c[1]; lut[i * 3 + 2] = c[2];
   }
   return lut;
-}
-
-/** Gradient-map stops from a palette: anchored to a deep dark and a clean light. */
-export function gradientStops(palette: RGB[]): RGB[] {
-  const sorted = [...palette].sort((a, b) => luma(a) - luma(b));
-  const dark = mixRgb(sorted[0], [0, 0, 0], 0.65);
-  const light = mixRgb(sorted[sorted.length - 1], [255, 255, 255], 0.6);
-  // Keep at most 4 interior stops so the map stays legible.
-  const step = Math.max(1, Math.ceil(sorted.length / 4));
-  const interior = sorted.filter((_, i) => i % step === 0);
-  return [dark, ...interior, light];
-}
-
-export function pickRisoInks(source: Swatch[], count: number, rng: Rng): RGB[] {
-  const inks = RISO_INKS.map((i) => parseHex(i.hex));
-  const chosen: RGB[] = [];
-  for (const s of source) {
-    if (chosen.length >= count) break;
-    if (saturation(s.rgb) < 0.12) continue;
-    const best = inks.filter((i) => !chosen.includes(i)).sort((a, b) => dist2(a, s.rgb) - dist2(b, s.rgb))[0];
-    if (best) chosen.push(best);
-  }
-  while (chosen.length < count) {
-    const rest = inks.filter((i) => !chosen.includes(i));
-    chosen.push(rng.pick(rest));
-  }
-  return chosen;
 }
 
 const COLOR_NAMES: [string, string][] = [

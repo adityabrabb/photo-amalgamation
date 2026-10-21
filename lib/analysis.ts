@@ -1,12 +1,50 @@
-// Per-image analysis (runs in the worker): dominant colors + a coarse saliency grid for the subject cut.
-// Also the 64-bit perceptual hash used by the no-repeat system.
+// Per-image analysis (runs in the worker): dominant colors, a coarse saliency grid, the subject box it
+// implies, and luma levels for auto-contrast. Also the 64-bit perceptual hash used by the no-repeat system.
 import { kmeans, type RGB, type Swatch } from "./palette";
+
+/** Box in normalized image coordinates (0..1). */
+export type NBox = { x: number; y: number; w: number; h: number };
 
 export type Analysis = {
   palette: Swatch[];
   /** Saliency grid, row-major, values 0..1. */
   saliency: { w: number; h: number; data: number[] };
+  /** Where the subject sits: saliency-mass box + centroid, and how clearly it stands out (0..1). */
+  subject: NBox & { cx: number; cy: number; strength: number };
+  /** Luma at the 2nd and 98th percentile, 0..255 — every print stretches to full range. */
+  levels: [number, number];
 };
+
+/** Saliency-weighted subject box: 12th–88th percentile of the squared-saliency mass on each axis. */
+function subjectBox(sal: number[], gw: number, gh: number): Analysis["subject"] {
+  const mean = sal.reduce((a, b) => a + b, 0) / sal.length;
+  const wts = sal.map((v) => Math.max(0, v - mean) ** 2);
+  const total = wts.reduce((a, b) => a + b, 0);
+  if (total <= 1e-9) return { x: 0.2, y: 0.2, w: 0.6, h: 0.6, cx: 0.5, cy: 0.5, strength: 0 };
+  const colMass = new Array<number>(gw).fill(0), rowMass = new Array<number>(gh).fill(0);
+  let cx = 0, cy = 0;
+  wts.forEach((v, i) => {
+    const x = i % gw, y = Math.floor(i / gw);
+    colMass[x] += v; rowMass[y] += v; cx += (x + 0.5) * v; cy += (y + 0.5) * v;
+  });
+  const pct = (mass: number[], q: number) => {
+    let acc = 0;
+    for (let i = 0; i < mass.length; i++) {
+      acc += mass[i];
+      if (acc >= q * total) return i + (1 - (acc - q * total) / Math.max(1e-9, mass[i]));
+    }
+    return mass.length;
+  };
+  const x0 = pct(colMass, 0.12) / gw, x1 = pct(colMass, 0.88) / gw;
+  const y0 = pct(rowMass, 0.12) / gh, y1 = pct(rowMass, 0.88) / gh;
+  let inS = 0, inN = 0, outS = 0, outN = 0;
+  sal.forEach((v, i) => {
+    const x = (i % gw + 0.5) / gw, y = (Math.floor(i / gw) + 0.5) / gh;
+    if (x >= x0 && x <= x1 && y >= y0 && y <= y1) { inS += v; inN++; } else { outS += v; outN++; }
+  });
+  const strength = Math.min(1, Math.max(0, (inN ? inS / inN : 0) - (outN ? outS / outN : 0)) * 1.6);
+  return { x: x0, y: y0, w: Math.max(0.05, x1 - x0), h: Math.max(0.05, y1 - y0), cx: cx / total / gw, cy: cy / total / gh, strength };
+}
 
 export function analyzeImage(img: ImageData, hash: string): Analysis {
   const { width: w, height: h, data } = img;
@@ -81,7 +119,16 @@ export function analyzeImage(img: ImageData, hash: string): Analysis {
   const max = Math.max(...sal), min = Math.min(...sal);
   const norm = sal.map((v) => (max > min ? (v - min) / (max - min) : 0));
 
-  return { palette, saliency: { w: gw, h: gh, data: norm } };
+  const hist = new Array<number>(256).fill(0);
+  for (let i = 0; i < data.length; i += 4) hist[Math.round(0.2126 * data[i] + 0.7152 * data[i + 1] + 0.0722 * data[i + 2])]++;
+  const lumaAt = (q: number) => {
+    let acc = 0;
+    for (let v = 0; v < 256; v++) if ((acc += hist[v]) >= q * w * h) return v;
+    return 255;
+  };
+  const levels: [number, number] = [lumaAt(0.02), Math.max(lumaAt(0.02) + 24, lumaAt(0.98))];
+
+  return { palette, saliency: { w: gw, h: gh, data: norm }, subject: subjectBox(norm, gw, gh), levels };
 }
 
 /** 64-bit DCT perceptual hash of a 32×32 grayscale image, as 16 hex chars. */

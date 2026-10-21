@@ -1,4 +1,5 @@
-// Option lists, settings, recipes and the rules that tie moods to cuts / layouts / blend sets.
+// Option lists, settings and recipes. A piece is a print: one style (a poster school / print process),
+// one format (poster, hero section, background), one ink set, one word.
 
 export const RATIOS = {
   "1:1": 1,
@@ -9,87 +10,81 @@ export const RATIOS = {
 } as const;
 export type Ratio = keyof typeof RATIOS;
 
-export const MOODS = ["kintsugi", "riso", "dreamscape", "brutal", "glitch", "bauhaus", "botanical"] as const;
-export type Mood = (typeof MOODS)[number];
-export const MOOD_LABELS: Record<Mood, string> = {
-  kintsugi: "Kintsugi",
-  riso: "Risograph",
-  dreamscape: "Dreamscape",
-  brutal: "Brutal",
-  glitch: "Glitch",
-  bauhaus: "Bauhaus",
-  botanical: "Botanical",
+export const STYLES = ["riso", "sandwich", "swiss", "pop", "slices", "monument", "smear", "kaleido"] as const;
+export type Style = (typeof STYLES)[number];
+export const STYLE_LABELS: Record<Style, string> = {
+  riso: "Riso overprint",
+  sandwich: "Sticker sandwich",
+  swiss: "Swiss windows",
+  pop: "Comic pop",
+  slices: "Lenticular slices",
+  monument: "Letters as windows",
+  smear: "Pixel smear",
+  kaleido: "Kaleidoscope",
 };
 
-export const CUTS = ["voronoi", "strips", "blobs", "circles", "triangles", "polygons", "subject"] as const;
-export type Cut = (typeof CUTS)[number];
-export const CUT_LABELS: Record<Cut, string> = {
-  voronoi: "Voronoi shards",
-  strips: "Strips",
-  blobs: "Torn blobs",
-  circles: "Circles & arches",
-  triangles: "Triangles",
-  polygons: "Random polygons",
-  subject: "Subject cut",
+export const FORMATS = ["poster", "hero", "wall"] as const;
+export type Format = (typeof FORMATS)[number];
+export const FORMAT_LABELS: Record<Format, string> = {
+  poster: "Poster",
+  hero: "Hero section",
+  wall: "Background",
 };
 
-export const LAYOUTS = ["golden", "radial", "diagonal", "grid", "chaos"] as const;
-export type Layout = (typeof LAYOUTS)[number];
-export const LAYOUT_LABELS: Record<Layout, string> = {
-  golden: "Golden focal",
-  radial: "Radial burst",
-  diagonal: "Flowing diagonal",
-  grid: "Broken grid",
-  chaos: "Pure chaos",
-};
-
-export const BLEND_SETS = {
-  calm: ["soft-light", "multiply"],
-  luminous: ["screen", "soft-light", "overlay"],
-  contrast: ["overlay", "multiply", "difference"],
-  acid: ["difference", "screen"],
-  ink: ["multiply"],
-  mixed: ["multiply", "screen", "overlay", "difference", "soft-light"],
-} as const satisfies Record<string, readonly GlobalCompositeOperation[]>;
-export type BlendSet = keyof typeof BLEND_SETS;
-export const BLEND_SET_NAMES = Object.keys(BLEND_SETS) as BlendSet[];
-
-export const PALETTE_MODES = ["source", "warm", "cold", "mono", "neon"] as const;
+export const PALETTE_MODES = ["source", "loud", "warm", "cold", "neon", "mono"] as const;
 export type PaletteMode = (typeof PALETTE_MODES)[number];
+export const PALETTE_LABELS: Record<PaletteMode, string> = {
+  source: "Match photos",
+  loud: "Any loud set",
+  warm: "Warm",
+  cold: "Cold",
+  neon: "Fluoro",
+  mono: "Black + one",
+};
+
+export const HEADLINE_MAX = 24;
 
 export type Settings = {
   ratio: Ratio;
-  mood: Mood | "auto";
-  cut: Cut | "auto";
-  /** 0 = few big pieces, 1 = many small pieces. */
-  density: number;
-  chaos: number;
-  /** Blend intensity. */
-  blend: number;
+  format: Format | "auto";
+  style: Style | "auto";
   palette: PaletteMode;
-  /** Liquid warp amount (WebGL displacement). 0 = off. */
+  /** The word on the print. Empty = picked from the photos' colours. */
+  headline: string;
+  /** 0 = calm and square, 1 = tilted, misregistered, crowded. */
+  energy: number;
+  /** Size of the word: 0 = large, 1 = monumental (cropped by the edges). */
+  scale: number;
+  /** Print texture (ink dropout, toner specks). 0 = perfectly clean. */
+  texture: number;
+  /** Liquid warp amount on the images (type stays crisp). 0 = off. */
   warp: number;
 };
 
 export const DEFAULT_SETTINGS: Settings = {
   ratio: "4:5",
-  mood: "auto",
-  cut: "auto",
-  density: 0.45,
-  chaos: 0.4,
-  blend: 0.55,
+  format: "auto",
+  style: "auto",
   palette: "source",
+  headline: "",
+  energy: 0.45,
+  scale: 0.6,
+  texture: 0.35,
   warp: 0,
 };
 
 /** Fully resolved creative choices. seed + settings + recipe reproduces a piece exactly. */
 export type Recipe = {
-  mood: Mood;
-  /** Secondary mood inherited in Duel mode. */
-  mood2: Mood | null;
-  cut: Cut;
-  layout: Layout;
-  blendSet: BlendSet;
+  style: Style;
+  format: Format;
+  /** Ink set id (see palette.ts). */
+  inks: string;
+  /** Layout variant within the style. */
+  variant: number;
+  /** Secondary style inherited in Duel mode: borrows its signature detail. */
+  style2: Style | null;
+  /** Print date, YYYY.MM.DD — printed on the piece. */
+  day: string;
   /** Remix generation; 0 = original. */
   remix: number;
   hybrid: boolean;
@@ -104,18 +99,6 @@ export type PieceSpec = {
   kind: PieceKind;
   label?: string;
   parents?: string[];
-};
-
-type MoodRule = { cuts: readonly Cut[]; layouts: readonly Layout[]; blendSets: readonly BlendSet[] };
-
-export const MOOD_RULES: Record<Mood, MoodRule> = {
-  kintsugi: { cuts: ["voronoi", "polygons", "triangles", "strips", "subject"], layouts: LAYOUTS, blendSets: ["calm", "mixed", "luminous"] },
-  riso: { cuts: CUTS, layouts: LAYOUTS, blendSets: ["ink", "calm"] },
-  dreamscape: { cuts: ["blobs", "circles", "voronoi", "subject", "strips"], layouts: ["golden", "radial", "diagonal", "chaos"], blendSets: ["luminous", "calm"] },
-  brutal: { cuts: ["strips", "polygons", "triangles", "voronoi", "circles"], layouts: LAYOUTS, blendSets: ["contrast", "ink"] },
-  glitch: { cuts: ["strips", "voronoi", "polygons", "triangles", "subject"], layouts: LAYOUTS, blendSets: ["acid", "contrast", "mixed"] },
-  bauhaus: { cuts: ["circles", "triangles", "strips"], layouts: ["grid"], blendSets: ["ink", "calm"] },
-  botanical: { cuts: ["blobs", "subject"], layouts: ["golden", "diagonal", "radial"], blendSets: ["calm", "ink", "luminous"] },
 };
 
 /** Long side of a 1x export, in pixels. 2x/4x multiply this. */
@@ -135,14 +118,20 @@ export function designSize(ratio: Ratio): { w: number; h: number } {
   return r >= 1 ? { w: 1000 * r, h: 1000 } : { w: 1000, h: 1000 / r };
 }
 
+export function cleanHeadline(s: string): string {
+  return s.replace(/\s+/g, " ").trimStart().slice(0, HEADLINE_MAX);
+}
+
 export function isSettings(v: unknown): v is Settings {
   const s = v as Settings;
   return (
     !!s &&
     s.ratio in RATIOS &&
-    (s.mood === "auto" || MOODS.includes(s.mood)) &&
-    (s.cut === "auto" || CUTS.includes(s.cut)) &&
-    [s.density, s.chaos, s.blend, s.warp].every((n) => typeof n === "number" && n >= 0 && n <= 1) &&
+    (s.format === "auto" || FORMATS.includes(s.format)) &&
+    (s.style === "auto" || STYLES.includes(s.style)) &&
+    typeof s.headline === "string" &&
+    s.headline.length <= HEADLINE_MAX &&
+    [s.energy, s.scale, s.texture, s.warp].every((n) => typeof n === "number" && n >= 0 && n <= 1) &&
     PALETTE_MODES.includes(s.palette)
   );
 }
@@ -151,11 +140,12 @@ export function isRecipe(v: unknown): v is Recipe {
   const r = v as Recipe;
   return (
     !!r &&
-    MOODS.includes(r.mood) &&
-    (r.mood2 === null || MOODS.includes(r.mood2)) &&
-    CUTS.includes(r.cut) &&
-    LAYOUTS.includes(r.layout) &&
-    r.blendSet in BLEND_SETS &&
+    STYLES.includes(r.style) &&
+    FORMATS.includes(r.format) &&
+    typeof r.inks === "string" &&
+    Number.isInteger(r.variant) &&
+    (r.style2 === null || STYLES.includes(r.style2)) &&
+    typeof r.day === "string" &&
     Number.isInteger(r.remix) &&
     typeof r.hybrid === "boolean"
   );

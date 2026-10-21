@@ -1,19 +1,11 @@
 // Recipe resolution: turns "auto" settings into concrete choices.
 // Variety bias ("unused first") and the recent-combo penalty apply only when usage stats are passed in;
 // without stats the choice depends on the seed alone (used for Daily Fuse and pasted seeds).
+import { inkAffinity, inkCandidates, type Swatch } from "./palette";
 import { type Rng } from "./prng";
-import {
-  MOODS,
-  MOOD_RULES,
-  type BlendSet,
-  type Cut,
-  type Layout,
-  type Mood,
-  type Recipe,
-  type Settings,
-} from "./settings";
+import { FORMATS, RATIOS, STYLES, type Format, type Recipe, type Settings, type Style } from "./settings";
 
-export type Dim = "mood" | "cut" | "layout" | "blendSet";
+export type Dim = "style" | "format" | "inks";
 
 export type UsageStats = {
   counts: Record<Dim, Record<string, number>>;
@@ -24,16 +16,16 @@ export type UsageStats = {
 export const RECENT_WINDOW = 24;
 
 export function emptyStats(): UsageStats {
-  return { counts: { mood: {}, cut: {}, layout: {}, blendSet: {} }, recent: [] };
+  return { counts: { style: {}, format: {}, inks: {} }, recent: [] };
 }
 
-export function comboKey(r: Pick<Recipe, "mood" | "cut" | "layout" | "blendSet">): string {
-  return `${r.mood}|${r.cut}|${r.layout}|${r.blendSet}`;
+export function comboKey(r: Pick<Recipe, "style" | "format" | "inks">): string {
+  return `${r.style}|${r.format}|${r.inks}`;
 }
 
 export function addUsage(stats: UsageStats, r: Recipe): UsageStats {
   const counts = { ...stats.counts };
-  for (const dim of ["mood", "cut", "layout", "blendSet"] as Dim[]) {
+  for (const dim of ["style", "format", "inks"] as Dim[]) {
     counts[dim] = { ...counts[dim], [r[dim]]: (counts[dim][r[dim]] ?? 0) + 1 };
   }
   return { counts, recent: [comboKey(r), ...stats.recent].slice(0, RECENT_WINDOW) };
@@ -47,42 +39,49 @@ function varietyWeights(dim: Dim, options: readonly string[], stats: UsageStats 
   return counts.map((c) => 1 / Math.pow(1 + (c - min), 1.4));
 }
 
-function pickDim<T extends string>(dim: Dim, options: readonly T[], rng: Rng, stats: UsageStats | null, avoid?: T): T {
-  const pool = options.length > 1 && avoid ? options.filter((o) => o !== avoid) : options;
-  return rng.weighted(pool, varietyWeights(dim, pool, stats));
+function pickDim<T extends string>(dim: Dim, options: readonly T[], rng: Rng, stats: UsageStats | null, avoid?: T, bias?: number[]): T {
+  const idx = options.map((_, i) => i).filter((i) => !(options.length > 1 && avoid && options[i] === avoid));
+  const pool = idx.map((i) => options[i]);
+  const w = varietyWeights(dim, pool, stats).map((v, k) => v * (bias ? bias[idx[k]] : 1));
+  return rng.weighted(pool, w);
 }
 
-function allowedCuts(mood: Mood): readonly Cut[] {
-  return MOOD_RULES[mood].cuts;
+/** Wide canvases lean hero (never on tall ones), tall ones lean poster; backgrounds come up about a quarter of the time. */
+function formatBias(settings: Settings): number[] {
+  const wide = RATIOS[settings.ratio] > 1.2;
+  return FORMATS.map((f) => (f === "wall" ? 0.45 : f === "hero" ? (wide ? 1.4 : 0) : wide ? 0.35 : 1.4));
+}
+
+/** Ink sets that suit the photos rank higher; "source" leans hard on the match. */
+function pickInks(settings: Settings, source: Swatch[], rng: Rng, stats: UsageStats | null, avoid?: string): string {
+  const sets = inkCandidates(settings.palette);
+  const ids = sets.map((s) => s.id);
+  const bias = sets.map((s) => (settings.palette === "source" ? Math.pow(0.05 + inkAffinity(s, source), 3) : 1));
+  return pickDim("inks", ids, rng, stats, avoid, bias);
+}
+
+export function today(date = new Date()): string {
+  return `${date.getFullYear()}.${String(date.getMonth() + 1).padStart(2, "0")}.${String(date.getDate()).padStart(2, "0")}`;
 }
 
 /**
  * Resolve settings into a recipe. `keep` holds the previous recipe while the seed is locked, so auto
  * dimensions stay stable while sliders are tweaked.
  */
-export function resolveRecipe(settings: Settings, rng: Rng, stats: UsageStats | null, keep?: Recipe): Recipe {
+export function resolveRecipe(settings: Settings, rng: Rng, stats: UsageStats | null, source: Swatch[], keep?: Recipe, day = today()): Recipe {
   const draw = (): Recipe => {
-    let moods: readonly Mood[] = settings.mood === "auto" ? MOODS : [settings.mood];
-    if (settings.cut !== "auto") {
-      const cut = settings.cut;
-      const compatible = moods.filter((m) => allowedCuts(m).includes(cut));
-      if (compatible.length) moods = compatible;
-    }
-    const mood =
-      settings.mood !== "auto" ? settings.mood : keep && moods.includes(keep.mood) ? keep.mood : pickDim("mood", moods, rng, stats);
-    const rule = MOOD_RULES[mood];
-
-    const cut: Cut =
-      settings.cut !== "auto"
-        ? settings.cut
-        : keep && rule.cuts.includes(keep.cut)
-          ? keep.cut
-          : pickDim("cut", rule.cuts, rng, stats);
-    const layout: Layout = keep && rule.layouts.includes(keep.layout) ? keep.layout : pickDim("layout", rule.layouts, rng, stats);
-    const blendSet: BlendSet =
-      keep && rule.blendSets.includes(keep.blendSet) ? keep.blendSet : pickDim("blendSet", rule.blendSets, rng, stats);
-
-    return { mood, mood2: keep?.mood2 ?? null, cut, layout, blendSet, remix: keep?.remix ?? 0, hybrid: keep?.hybrid ?? false };
+    const style: Style = settings.style !== "auto" ? settings.style : keep ? keep.style : pickDim("style", STYLES, rng, stats);
+    const format: Format = settings.format !== "auto" ? settings.format : keep ? keep.format : pickDim("format", FORMATS, rng, stats, undefined, formatBias(settings));
+    const inksOk = keep && inkCandidates(settings.palette).some((s) => s.id === keep.inks);
+    const inks = inksOk ? keep!.inks : pickInks(settings, source, rng, stats);
+    return {
+      style, format, inks,
+      variant: keep?.variant ?? rng.int(0, 999),
+      style2: keep?.style2 ?? null,
+      day: keep?.day ?? day,
+      remix: keep?.remix ?? 0,
+      hybrid: keep?.hybrid ?? false,
+    };
   };
 
   if (keep || !stats) return draw();
@@ -99,33 +98,21 @@ export function resolveRecipe(settings: Settings, rng: Rng, stats: UsageStats | 
   return recipe;
 }
 
-/** Remix: same seed + layout, new cut (unless the user pinned one), new blend set and colors. */
-export function remixRecipe(r: Recipe, settings: Settings, rng: Rng, stats: UsageStats | null): Recipe {
-  const rule = MOOD_RULES[r.mood];
-  return {
-    ...r,
-    cut: settings.cut !== "auto" ? r.cut : pickDim("cut", rule.cuts, rng, stats, r.cut),
-    blendSet: pickDim("blendSet", rule.blendSets, rng, stats, r.blendSet),
-    remix: r.remix + 1,
-  };
+/** Remix: same seed, style and format; new inks and a new layout variant. */
+export function remixRecipe(r: Recipe, settings: Settings, rng: Rng, stats: UsageStats | null, source: Swatch[]): Recipe {
+  return { ...r, inks: pickInks(settings, source, rng, stats, r.inks), variant: rng.int(0, 999), remix: r.remix + 1 };
 }
 
-/** Duel child: each trait inherited from one parent, the other parent's mood carried as a secondary mood. */
+/** Duel child: style from one parent, inks and format from either, the other parent's style as a borrowed detail. */
 export function duelRecipe(a: Recipe, b: Recipe, rng: Rng): Recipe {
   const [p, q] = rng.next() < 0.5 ? [a, b] : [b, a];
-  const mood = p.mood;
-  const rule = MOOD_RULES[mood];
-  const from = <T,>(x: T, y: T, ok: (v: T) => boolean): T => {
-    const first = rng.next() < 0.5 ? x : y;
-    const second = first === x ? y : x;
-    return ok(first) ? first : ok(second) ? second : first;
-  };
   return {
-    mood,
-    mood2: q.mood !== mood ? q.mood : (q.mood2 ?? p.mood2 ?? null),
-    cut: from(p.cut, q.cut, (c) => rule.cuts.includes(c)),
-    layout: from(p.layout, q.layout, (l) => rule.layouts.includes(l)),
-    blendSet: from(p.blendSet, q.blendSet, (s) => rule.blendSets.includes(s)),
+    style: p.style,
+    style2: q.style !== p.style ? q.style : (q.style2 ?? p.style2 ?? null),
+    format: rng.next() < 0.5 ? p.format : q.format,
+    inks: rng.next() < 0.5 ? p.inks : q.inks,
+    variant: rng.int(0, 999),
+    day: today(),
     remix: 0,
     hybrid: true,
   };
@@ -135,23 +122,23 @@ export function duelSettings(a: Settings, b: Settings, rng: Rng): Settings {
   const mix = (x: number, y: number) => Math.min(1, Math.max(0, (x + y) / 2 + rng.range(-0.08, 0.08)));
   return {
     ratio: rng.next() < 0.5 ? a.ratio : b.ratio,
-    mood: "auto",
-    cut: "auto",
-    density: mix(a.density, b.density),
-    chaos: mix(a.chaos, b.chaos),
-    blend: mix(a.blend, b.blend),
+    format: "auto",
+    style: "auto",
     palette: rng.next() < 0.5 ? a.palette : b.palette,
+    headline: rng.next() < 0.5 ? a.headline : b.headline,
+    energy: mix(a.energy, b.energy),
+    scale: mix(a.scale, b.scale),
+    texture: mix(a.texture, b.texture),
     warp: mix(a.warp, b.warp),
   };
 }
 
-/** After repeated near-duplicates, nudge chaos/density to escape the neighbourhood. */
+/** After repeated near-duplicates, nudge energy/scale to escape the neighbourhood. */
 export function nudgeSettings(s: Settings, rng: Rng): Settings {
   const nudge = (v: number) => {
     const d = rng.range(0.1, 0.22) * rng.sign();
     const n = v + d;
     return Math.min(1, Math.max(0, n < 0 || n > 1 ? v - d : n));
   };
-  return { ...s, density: nudge(s.density), chaos: nudge(s.chaos) };
+  return { ...s, energy: nudge(s.energy), scale: nudge(s.scale) };
 }
-

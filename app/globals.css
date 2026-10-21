@@ -20,7 +20,6 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
 .app { min-height: 100dvh; display: flex; flex-direction: column; }
 .top { display: flex; align-items: center; gap: 14px; padding: 12px 20px; border-bottom: 1px solid var(--line); }
 .top h1 { margin: 0; font: 600 19px/1 "Iowan Old Style", "Palatino Linotype", Georgia, serif; letter-spacing: 0.02em; display: flex; align-items: center; gap: 8px; }
-.seam-mark { display: inline-block; width: 22px; height: 2px; background: linear-gradient(90deg, #b8862b, #ffe9a8, #d4a943); box-shadow: 0 0 8px rgba(255, 196, 80, 0.7); transform: rotate(-24deg); }
 .top-actions { margin-left: auto; display: flex; align-items: center; gap: 8px; }
 .muted { color: var(--muted); }
 .small { font-size: 12px; }

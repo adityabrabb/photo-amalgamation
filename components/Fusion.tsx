@@ -32,21 +32,24 @@ import {
   type LedgerEntry,
   type LedgerSummary,
 } from "@/lib/ledger";
+import { fontsReady } from "@/lib/fonts";
+import { inkSet, mergePalettes } from "@/lib/palette";
 import type { Plan } from "@/lib/planner";
 import { forkRng, isValidSeed, newSeed } from "@/lib/prng";
 import { addUsage, duelRecipe, duelSettings, emptyStats, nudgeSettings, remixRecipe, resolveRecipe } from "@/lib/recipe";
 import { phashInput, renderPiece, renderToCanvas } from "@/lib/render";
 import {
-  CUTS,
-  CUT_LABELS,
   DEFAULT_SETTINGS,
   EXPORT_BASE_LONG_SIDE,
-  LAYOUT_LABELS,
-  MOODS,
-  MOOD_LABELS,
-  MOOD_RULES,
+  FORMATS,
+  FORMAT_LABELS,
+  HEADLINE_MAX,
+  PALETTE_LABELS,
   PALETTE_MODES,
   RATIOS,
+  STYLES,
+  STYLE_LABELS,
+  cleanHeadline,
   sizeFor,
   type PieceSpec,
   type Ratio,
@@ -85,6 +88,8 @@ async function makeThumb(plan: Plan, sources: ImageBitmap[]): Promise<Blob | und
   const c = renderToCanvas(plan, sources, w, h);
   return new Promise((r) => c.toBlob((b) => r(b ?? undefined), "image/webp", 0.92));
 }
+
+const sourceOf = (imgs: SourceImage[]) => mergePalettes(imgs.map((i) => i.analysis.palette));
 
 function isTyping(el: EventTarget | null) {
   const t = el as HTMLElement | null;
@@ -177,7 +182,7 @@ export default function Fusion() {
     setSeedInput(spec.seed);
   };
 
-  const planFor = (spec: PieceSpec, imgs: SourceImage[]) => engine.plan(spec, planImages(imgs));
+  const planFor = async (spec: PieceSpec, imgs: SourceImage[]) => (await Promise.all([engine.plan(spec, planImages(imgs)), fontsReady()]))[0];
 
   const fail = (e: unknown) => {
     setBusy(null);
@@ -205,7 +210,7 @@ export default function Fusion() {
               settings = nudgeSettings(settings, forkRng(seed, "nudge"));
               nudged = true;
             }
-            const recipe = resolveRecipe(settings, forkRng(seed, "recipe"), summaryRef.current.stats);
+            const recipe = resolveRecipe(settings, forkRng(seed, "recipe"), summaryRef.current.stats, sourceOf(imgs));
             spec = { seed, settings, recipe, kind: "fresh" };
             plan = await planFor(spec, imgs);
           }
@@ -216,7 +221,7 @@ export default function Fusion() {
           if (minHamming(ph, summaryRef.current.phashes) >= PHASH_THRESHOLD) break;
         }
         if (!chosen || token !== genRef.current) return;
-        if (nudged) commitSettings({ ...settingsRef.current, density: settings.density, chaos: settings.chaos });
+        if (nudged) commitSettings({ ...settingsRef.current, energy: settings.energy, scale: settings.scale });
         show(chosen.spec, chosen.plan, imgs, true);
         setBusy(null);
         setStatus("");
@@ -236,7 +241,7 @@ export default function Fusion() {
     const token = ++genRef.current;
     try {
       const settings = settingsRef.current;
-      const recipe = resolveRecipe(settings, forkRng(cur.spec.seed, "recipe"), null, cur.spec.recipe);
+      const recipe = resolveRecipe(settings, forkRng(cur.spec.seed, "recipe"), null, sourceOf(imgs), cur.spec.recipe);
       const spec: PieceSpec = { ...cur.spec, settings, recipe, kind: "locked" };
       const plan = await planFor(spec, imgs);
       if (token !== genRef.current) return;
@@ -248,12 +253,16 @@ export default function Fusion() {
     }
   }, [record]);
 
-  /** After any settings/images change: locked → same seed; unlocked → fresh seed. */
-  const scheduleUpdate = useCallback(() => {
-    if (!currentRef.current) return;
-    if (debounceRef.current) clearTimeout(debounceRef.current);
-    debounceRef.current = setTimeout(() => (lockedRef.current ? rerenderLocked() : fuseFresh()), lockedRef.current ? 30 : 450);
-  }, [fuseFresh, rerenderLocked]);
+  /** After any settings/images change: locked (or `keepSeed`) → same seed; unlocked → fresh seed. */
+  const scheduleUpdate = useCallback(
+    (keepSeed = false) => {
+      if (!currentRef.current) return;
+      const same = lockedRef.current || keepSeed;
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+      debounceRef.current = setTimeout(() => (same ? rerenderLocked() : fuseFresh()), same ? 60 : 450);
+    },
+    [fuseFresh, rerenderLocked],
+  );
 
   /** Explicit repeat / reproduction paths (Enter seed, links, JSON, Daily, Remix, Duel). */
   const renderExplicit = useCallback(
@@ -386,11 +395,10 @@ export default function Fusion() {
   };
 
   // ---- Settings ----
-  const updateSettings = (patch: Partial<Settings>) => {
-    const next = { ...settingsRef.current, ...patch };
-    if (patch.mood && patch.mood !== "auto" && next.cut !== "auto" && !MOOD_RULES[patch.mood].cuts.includes(next.cut)) next.cut = "auto";
-    commitSettings(next);
-    scheduleUpdate();
+  /** Headline edits keep the composition (same seed); everything else follows the lock. */
+  const updateSettings = (patch: Partial<Settings>, keepSeed = false) => {
+    commitSettings({ ...settingsRef.current, ...patch });
+    scheduleUpdate(keepSeed);
   };
 
   // ---- Actions ----
@@ -404,7 +412,7 @@ export default function Fusion() {
     const cur = currentRef.current;
     if (!cur || !canFuse) return;
     const n = cur.spec.recipe.remix + 1;
-    const recipe = remixRecipe(cur.spec.recipe, cur.spec.settings, forkRng(cur.spec.seed, `remix:${n}`), summaryRef.current.stats);
+    const recipe = remixRecipe(cur.spec.recipe, cur.spec.settings, forkRng(cur.spec.seed, `remix:${n}`), summaryRef.current.stats, sourceOf(imagesRef.current));
     renderExplicit({ ...cur.spec, recipe, kind: "remix", label: `Variation ${n} of ${cur.spec.seed.slice(0, 4).toUpperCase()}` }, imagesRef.current, true);
   };
 
@@ -419,7 +427,7 @@ export default function Fusion() {
       return;
     }
     const settings = settingsRef.current;
-    const recipe = resolveRecipe(settings, forkRng(seed, "recipe"), null);
+    const recipe = resolveRecipe(settings, forkRng(seed, "recipe"), null, sourceOf(imagesRef.current));
     renderExplicit({ seed, settings, recipe, kind: "seed", label: "Entered seed" }, imagesRef.current, true);
   };
 
@@ -427,7 +435,7 @@ export default function Fusion() {
     if (!canFuse) return;
     const { seed, day } = await dailySeed();
     const settings = settingsRef.current;
-    const recipe = resolveRecipe(settings, forkRng(seed, "recipe"), null);
+    const recipe = resolveRecipe(settings, forkRng(seed, "recipe"), null, sourceOf(imagesRef.current), undefined, day.replace(/-/g, "."));
     renderExplicit({ seed, settings, recipe, kind: "daily", label: `Daily Fuse · ${day}` }, imagesRef.current, true);
   };
 
@@ -494,7 +502,7 @@ export default function Fusion() {
       s.loop = (async () => {
         while (s.active) {
           const seed = newSeed();
-          const recipe = resolveRecipe(settingsRef.current, forkRng(seed, "recipe"), summaryRef.current.stats);
+          const recipe = resolveRecipe(settingsRef.current, forkRng(seed, "recipe"), summaryRef.current.stats, sourceOf(imagesRef.current));
           const spec: PieceSpec = { seed, settings: settingsRef.current, recipe, kind: "fresh" };
           const plan = await planFor(spec, imagesRef.current);
           if (token !== genRef.current) return;
@@ -713,11 +721,10 @@ export default function Fusion() {
 
   // ---- View ----
   const ratio = RATIOS[current?.spec.settings.ratio ?? settings.ratio];
-  const moodRule = settings.mood !== "auto" ? MOOD_RULES[settings.mood] : null;
   const plan = current?.plan;
   const spec = current?.spec;
 
-  const slider = (key: "density" | "chaos" | "blend" | "warp", label: string, left: string, right: string) => (
+  const slider = (key: "energy" | "scale" | "texture" | "warp", label: string, left: string, right: string) => (
     <label className="field">
       <span>
         {label} <em>{Math.round(settings[key] * 100)}</em>
@@ -734,7 +741,7 @@ export default function Fusion() {
     <main className="app">
       <header className="top">
         <h1>
-          Fusion<span className="seam-mark" aria-hidden />
+          Fusion
         </h1>
         <span className="muted hide-sm">Images never leave your browser.</span>
         <div className="top-actions">
@@ -797,35 +804,47 @@ export default function Fusion() {
             {images.length}/{MAX_IMAGES} images
           </div>
 
+          <label className="field">
+            <span>Headline</span>
+            <input
+              className="headline"
+              value={settings.headline}
+              maxLength={HEADLINE_MAX}
+              placeholder="auto: picked from your photos' colours"
+              spellCheck={false}
+              onChange={(e) => updateSettings({ headline: cleanHeadline(e.target.value) }, true)}
+            />
+          </label>
+
           <div className="grid2">
             <label className="field">
-              <span>Mood</span>
-              <select value={settings.mood} onChange={(e) => updateSettings({ mood: e.target.value as Settings["mood"] })}>
+              <span>Style</span>
+              <select value={settings.style} onChange={(e) => updateSettings({ style: e.target.value as Settings["style"] })}>
                 <option value="auto">Auto (variety)</option>
-                {MOODS.map((m) => (
+                {STYLES.map((m) => (
                   <option key={m} value={m}>
-                    {MOOD_LABELS[m]}
+                    {STYLE_LABELS[m]}
                   </option>
                 ))}
               </select>
             </label>
             <label className="field">
-              <span>Cut</span>
-              <select value={settings.cut} onChange={(e) => updateSettings({ cut: e.target.value as Settings["cut"] })}>
-                <option value="auto">Auto (variety)</option>
-                {CUTS.map((c) => (
-                  <option key={c} value={c} disabled={!!moodRule && !moodRule.cuts.includes(c)}>
-                    {CUT_LABELS[c]}
+              <span>Format</span>
+              <select value={settings.format} onChange={(e) => updateSettings({ format: e.target.value as Settings["format"] })}>
+                <option value="auto">Auto (by ratio)</option>
+                {FORMATS.map((f) => (
+                  <option key={f} value={f}>
+                    {FORMAT_LABELS[f]}
                   </option>
                 ))}
               </select>
             </label>
             <label className="field">
-              <span>Palette</span>
+              <span>Inks</span>
               <select value={settings.palette} onChange={(e) => updateSettings({ palette: e.target.value as Settings["palette"] })}>
                 {PALETTE_MODES.map((p) => (
                   <option key={p} value={p}>
-                    {p === "source" ? "Source colors" : p[0].toUpperCase() + p.slice(1)}
+                    {PALETTE_LABELS[p]}
                   </option>
                 ))}
               </select>
@@ -842,9 +861,9 @@ export default function Fusion() {
             </label>
           </div>
 
-          {slider("density", "Density", "few big", "many small")}
-          {slider("chaos", "Chaos", "calm", "wild")}
-          {slider("blend", "Blend intensity", "none", "full")}
+          {slider("scale", "Type size", "large", "monumental")}
+          {slider("energy", "Energy", "square", "wild")}
+          {slider("texture", "Print texture", "clean", "worn")}
           {slider("warp", "Liquid warp", "off", "melt")}
 
           <label className="check">
@@ -864,7 +883,7 @@ export default function Fusion() {
             <button className="primary big" disabled={!canFuse || !!busy} onClick={fuse}>
               {current ? (locked ? "Re-render" : "Shuffle") : "Fuse"}
             </button>
-            <button disabled={!current || !!busy} onClick={remix} title="Same seed + layout, new cut and colors">
+            <button disabled={!current || !!busy} onClick={remix} title="Same style and format, new inks and layout">
               Remix
             </button>
             <button className={locked ? "on" : ""} disabled={!current} onClick={() => setLocked(!locked)} title="Keep this seed while tweaking">
@@ -906,8 +925,8 @@ export default function Fusion() {
                 {spec.label && <span className="tag">{spec.label}</span>}
               </div>
               <div className="muted small">
-                {MOOD_LABELS[spec.recipe.mood]}
-                {spec.recipe.mood2 ? ` + ${MOOD_LABELS[spec.recipe.mood2]}` : ""} · {CUT_LABELS[spec.recipe.cut]} · {LAYOUT_LABELS[spec.recipe.layout]} · {spec.recipe.blendSet} blends
+                {STYLE_LABELS[spec.recipe.style]}
+                {spec.recipe.style2 ? ` + ${STYLE_LABELS[spec.recipe.style2]}` : ""} · {FORMAT_LABELS[spec.recipe.format]} · {inkSet(spec.recipe.inks).names.slice(0, 3).join(" / ")}
                 {plan.traits.length ? ` · ${plan.traits.join(" · ")}` : ""}
               </div>
             </div>

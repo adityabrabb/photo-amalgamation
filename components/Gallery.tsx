@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { allEntries, type LedgerEntry } from "@/lib/ledger";
-import { MOOD_LABELS, MOODS } from "@/lib/settings";
+import { STYLE_LABELS, STYLES } from "@/lib/settings";
 import Thumb from "./Thumb";
 
 type Props = {
@@ -30,14 +30,14 @@ export default function Gallery({ onClose, onRecall, onDuel }: Props) {
   const stats = useMemo(() => {
     const list = entries ?? [];
     const rarity = { Common: 0, Rare: 0, Legendary: 0 };
-    const moods = Object.fromEntries(MOODS.map((m) => [m, 0])) as Record<string, number>;
+    const styles = Object.fromEntries(STYLES.map((m) => [m, 0])) as Record<string, number>;
     const images = new Set<string>();
     for (const e of list) {
       rarity[e.rarity]++;
-      moods[e.recipe.mood]++;
+      styles[e.recipe.style]++;
       e.imageHashes.forEach((h) => images.add(h));
     }
-    return { total: list.length, rarity, moods, images: images.size, duels: list.filter((e) => e.kind === "duel").length };
+    return { total: list.length, rarity, styles, images: images.size, duels: list.filter((e) => e.kind === "duel").length };
   }, [entries]);
 
   const toggle = (id: string) =>
@@ -59,8 +59,8 @@ export default function Gallery({ onClose, onRecall, onDuel }: Props) {
             <span><b>{stats.duels}</b> duel children</span>
           </div>
           <div className="stats muted">
-            {MOODS.map((m) => (
-              <span key={m}>{MOOD_LABELS[m]} {stats.moods[m]}</span>
+            {STYLES.map((m) => (
+              <span key={m}>{STYLE_LABELS[m]} {stats.styles[m]}</span>
             ))}
           </div>
         </div>
@@ -76,7 +76,7 @@ export default function Gallery({ onClose, onRecall, onDuel }: Props) {
           <button onClick={onClose} aria-label="Close gallery">✕</button>
         </div>
       </header>
-      {duel && <p className="muted duel-hint">Pick two pieces. Their child inherits mood, cut, layout, blends and palette from both.</p>}
+      {duel && <p className="muted duel-hint">Pick two pieces. Their child takes its style from one, inks and format from either, and borrows a detail from the other.</p>}
       {entries === null ? (
         <p className="muted center">Loading…</p>
       ) : entries.length === 0 ? (
@@ -97,7 +97,7 @@ export default function Gallery({ onClose, onRecall, onDuel }: Props) {
                 <span className="plaque-title">{e.title}</span>
                 <span className={`badge r-${e.rarity.toLowerCase()}`}>{e.rarity}</span>
                 <span className="muted small">
-                  {MOOD_LABELS[e.recipe.mood]} · {new Date(e.createdAt).toLocaleDateString()}
+                  {STYLE_LABELS[e.recipe.style]} · {new Date(e.createdAt).toLocaleDateString()}
                   {e.label ? ` · ${e.label}` : ""}
                 </span>
               </span>
